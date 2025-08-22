@@ -166,7 +166,7 @@ function removeFromComparison(index) {
     const removedCombo = STATE.selectedCombinations[index];
     STATE.selectedCombinations.splice(index, 1);
     updateComparisonList();
-    
+
     analytics.logEvent('chart_removed', removedCombo);
 
     const modelKey = `${removedCombo.runtime}-${removedCombo.instance_type}-${removedCombo.model_name}`;
@@ -204,49 +204,197 @@ function clearComparison() {
     updateUrlWithState();
 }
 
-// Export data functionality
-function exportData() {
+// Export data functionality with ALB compatibility
+async function exportData() {
     if (STATE.selectedCombinations.length === 0) {
         showError('No data to export. Please select some models first.');
         return;
     }
 
-    if (!window.currentChartData) {
-        showError('No chart data available. Please wait for charts to load.');
+    // Try server-side export first (better for ALB)
+    try {
+        await exportDataFromServer();
         return;
+    } catch (serverError) {
+        console.warn('Server export failed, trying client-side:', serverError);
+
+        // Fallback to client-side export
+        if (!window.currentChartData) {
+            showError('No chart data available. Please wait for charts to load.');
+            return;
+        }
+
+        try {
+            const csvContent = generateCSV(window.currentChartData);
+
+            // Try multiple download methods for better ALB compatibility
+            if (!downloadWithBlob(csvContent)) {
+                if (!downloadWithDataURI(csvContent)) {
+                    // Fallback: show content in new window for manual save
+                    showCSVInNewWindow(csvContent);
+                }
+            }
+
+            // Log export event
+            analytics.logEvent('data_exported', {
+                combinations_count: STATE.selectedCombinations.length,
+                total_data_points: window.currentChartData.reduce((total, item) => total + item.data.length, 0),
+                method: 'client_side_fallback'
+            });
+
+            showSuccess('Data export initiated. If download doesn\'t start automatically, check for popup blockers.');
+
+        } catch (error) {
+            console.error('Export failed:', error);
+            showError('Export failed: ' + error.message);
+        }
     }
+}
 
-    const csvContent = generateCSV(window.currentChartData);
-    const dataBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(dataBlob);
+// Server-side export (preferred for ALB deployments)
+async function exportDataFromServer() {
+    showLoading(true);
 
-    const link = document.createElement('a');
-    link.href = url;
-    const now = new Date();
-    const timestamp = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
-    link.download = `llm-performance-data-${timestamp}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    try {
+        const response = await fetch(getApiUrl('/api/export-csv'), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                combinations: STATE.selectedCombinations
+            })
+        });
 
-    // Log export event
-    analytics.logEvent('data_exported', {
-        combinations_count: STATE.selectedCombinations.length,
-        total_data_points: window.currentChartData.reduce((total, item) => total + item.data.length, 0)
-    });
-    
-    showSuccess('Data exported successfully!');
+        if (!response.ok) {
+            throw new Error(`Server export failed: ${response.status} ${response.statusText}`);
+        }
+
+        // Get the CSV content as blob
+        const blob = await response.blob();
+
+        // Extract filename from Content-Disposition header if available
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = 'llm-performance-data.csv';
+        if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+            if (filenameMatch && filenameMatch[1]) {
+                filename = filenameMatch[1].replace(/['"]/g, '');
+            }
+        }
+
+        // Create download link
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.style.display = 'none';
+
+        document.body.appendChild(link);
+        link.click();
+
+        // Clean up
+        setTimeout(() => {
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }, 100);
+
+        // Log successful export
+        analytics.logEvent('data_exported', {
+            combinations_count: STATE.selectedCombinations.length,
+            method: 'server_side',
+            filename: filename
+        });
+
+        showSuccess('Data exported successfully from server!');
+
+    } catch (error) {
+        console.error('Server export failed:', error);
+        throw error;
+    } finally {
+        showLoading(false);
+    }
+}
+
+// Method 1: Blob download (original method)
+function downloadWithBlob(csvContent) {
+    try {
+        const dataBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(dataBlob);
+
+        const link = document.createElement('a');
+        link.href = url;
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
+        link.download = `llm-performance-data-${timestamp}.csv`;
+        link.style.display = 'none';
+
+        document.body.appendChild(link);
+        link.click();
+
+        // Clean up after a delay to ensure download starts
+        setTimeout(() => {
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }, 100);
+
+        return true;
+    } catch (error) {
+        console.warn('Blob download failed:', error);
+        return false;
+    }
+}
+
+// Method 2: Data URI download (more compatible with proxies)
+function downloadWithDataURI(csvContent) {
+    try {
+        const encodedUri = encodeURI('data:text/csv;charset=utf-8,' + csvContent);
+        const link = document.createElement('a');
+        link.setAttribute('href', encodedUri);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
+        link.setAttribute('download', `llm-performance-data-${timestamp}.csv`);
+        link.style.display = 'none';
+
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        return true;
+    } catch (error) {
+        console.warn('Data URI download failed:', error);
+        return false;
+    }
+}
+
+// Method 3: Fallback - show in new window for manual save
+function showCSVInNewWindow(csvContent) {
+    try {
+        const newWindow = window.open('', '_blank');
+        if (newWindow) {
+            newWindow.document.write('<html><head><title>LLM Performance Data</title></head><body>');
+            newWindow.document.write('<h2>LLM Performance Data Export</h2>');
+            newWindow.document.write('<p>Please copy the content below and save it as a .csv file:</p>');
+            newWindow.document.write('<textarea style="width:100%;height:80%;font-family:monospace;" readonly>');
+            newWindow.document.write(csvContent.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+            newWindow.document.write('</textarea>');
+            newWindow.document.write('</body></html>');
+            newWindow.document.close();
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.warn('New window fallback failed:', error);
+        return false;
+    }
 }
 
 // Generate CSV content with complete performance data
 function generateCSV(data) {
     let csvContent = `Export Date: ${new Date().toISOString()}\n\n`;
-    
+
     // CSV Headers
     const headers = [
         'Runtime',
-        'Instance Type', 
+        'Instance Type',
         'Model Name',
         'Input Tokens',
         'Output Tokens',
@@ -275,16 +423,16 @@ function generateCSV(data) {
         'Cost Per Million Output Tokens ($)',
         'Instance Price Used ($/hour)'
     ];
-    
+
     csvContent += headers.join(',') + '\n';
-    
+
     // Add data rows
     data.forEach(item => {
         const combo = item.combination;
-        
+
         // Sort data by processes for consistent ordering
         const sortedData = item.data.sort((a, b) => a.processes - b.processes);
-        
+
         sortedData.forEach(record => {
             const row = [
                 combo.runtime,
@@ -317,7 +465,7 @@ function generateCSV(data) {
                 record.cost_per_million_output_tokens || 0,
                 record.instance_price_used || 0
             ];
-            
+
             // Escape any commas in the data and wrap in quotes if needed
             const escapedRow = row.map(value => {
                 const stringValue = String(value);
@@ -326,11 +474,11 @@ function generateCSV(data) {
                 }
                 return stringValue;
             });
-            
+
             csvContent += escapedRow.join(',') + '\n';
         });
     });
-    
+
     return csvContent;
 }
 

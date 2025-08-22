@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 import pandas as pd
 import uvicorn
@@ -836,6 +836,225 @@ async def get_stats():
     }
     
     return stats
+
+
+@app.post("/api/export-csv")
+async def export_csv(http_request: Request, request: ComparisonRequest):
+    """Export performance data as CSV file - ALB compatible"""
+    try:
+        # Log export request
+        analytics.log_event(http_request, 'server_export_requested', {
+            'combinations_count': len(request.combinations),
+            'combinations': [
+                f"{combo.get('runtime', 'unknown')}-{combo.get('instance_type', 'unknown')}-{combo.get('model_name', 'unknown')}"
+                for combo in request.combinations
+            ]
+        })
+        
+        # Get the data using the same logic as comparison-data
+        result = []
+        for combo in request.combinations:
+            data = data_provider.get_performance_data(combo)
+            
+            # Get instance price from config
+            instance_type = combo.get('instance_type', '')
+            instance_price = price_provider.get_price(instance_type)
+            
+            # Calculate cost metrics and additional throughput metrics
+            for record in data:
+                # Get basic metrics
+                first_token_latency = record.get('first_token_latency_mean', 0)
+                end_to_end_latency = record.get('end_to_end_latency_mean', 0)
+                input_tokens = record.get('input_tokens', 0)
+                output_tokens = record.get('output_tokens', 0)
+                processes = record.get('processes', 1)
+                requests_per_second = record.get('requests_per_second', 0)
+                server_throughput = record.get('server_throughput', 0)
+                
+                # Calculate input throughput (tokens/sec)
+                if first_token_latency > 0 and input_tokens > 0:
+                    input_throughput = (input_tokens * processes) / first_token_latency * (requests_per_second / (processes / end_to_end_latency))
+                    record['input_throughput'] = input_throughput
+                else:
+                    record['input_throughput'] = 0
+                
+                # Calculate output throughput (tokens/sec) 
+                output_latency = end_to_end_latency - first_token_latency
+                if output_latency > 0 and output_tokens > 0:
+                    output_throughput = (output_tokens * processes) / output_latency * (requests_per_second / (processes / end_to_end_latency))
+                    record['output_throughput'] = output_throughput
+                else:
+                    record['output_throughput'] = 0
+                
+                # Calculate cost metrics if we have a price
+                if instance_price and instance_price > 0:
+                    if server_throughput > 0:
+                        cost_per_million_tokens = (instance_price / server_throughput) * 1000000 / 3600
+                        record['cost_per_million_tokens'] = cost_per_million_tokens
+                    else:
+                        record['cost_per_million_tokens'] = 0
+                    
+                    if requests_per_second > 0:
+                        cost_per_1k_requests = (instance_price / requests_per_second) * 1000 / 3600
+                        record['cost_per_1k_requests'] = cost_per_1k_requests
+                    else:
+                        record['cost_per_1k_requests'] = 0
+                    
+                    input_throughput_val = record.get('input_throughput', 0)
+                    if input_throughput_val > 0:
+                        cost_per_million_input_tokens = (instance_price / input_throughput_val) * 1000000 / 3600
+                        record['cost_per_million_input_tokens'] = cost_per_million_input_tokens
+                    else:
+                        record['cost_per_million_input_tokens'] = 0
+                    
+                    output_throughput_val = record.get('output_throughput', 0)
+                    if output_throughput_val > 0:
+                        cost_per_million_output_tokens = (instance_price / output_throughput_val) * 1000000 / 3600
+                        record['cost_per_million_output_tokens'] = cost_per_million_output_tokens
+                    else:
+                        record['cost_per_million_output_tokens'] = 0
+                    
+                    record['instance_price_used'] = instance_price
+                else:
+                    record['cost_per_million_tokens'] = 0
+                    record['cost_per_1k_requests'] = 0
+                    record['cost_per_million_input_tokens'] = 0
+                    record['cost_per_million_output_tokens'] = 0
+                    record['instance_price_used'] = 0
+            
+            result.append({
+                'combination': combo,
+                'data': data
+            })
+        
+        # Generate CSV content
+        csv_content = generate_csv_content(result)
+        
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"llm-performance-data-{timestamp}.csv"
+        
+        # Log successful export
+        analytics.log_event(http_request, 'server_export_completed', {
+            'combinations_count': len(request.combinations),
+            'total_data_points': sum(len(item['data']) for item in result),
+            'filename': filename
+        })
+        
+        # Return CSV as downloadable response
+        from fastapi.responses import Response
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Type": "text/csv; charset=utf-8",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"CSV export failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+def generate_csv_content(data):
+    """Generate CSV content from performance data"""
+    csv_lines = []
+    
+    # Add export metadata
+    csv_lines.append(f"Export Date: {datetime.now().isoformat()}")
+    csv_lines.append("")
+    
+    # CSV Headers
+    headers = [
+        'Runtime',
+        'Instance Type', 
+        'Model Name',
+        'Input Tokens',
+        'Output Tokens',
+        'Random Tokens',
+        'Processes',
+        'First Token Latency Mean (ms)',
+        'First Token Latency P50 (ms)',
+        'First Token Latency P90 (ms)',
+        'End to End Latency Mean (ms)',
+        'End to End Latency P50 (ms)',
+        'End to End Latency P90 (ms)',
+        'Output Tokens Per Second Mean',
+        'Output Tokens Per Second P50',
+        'Output Tokens Per Second P90',
+        'Success Rate (%)',
+        'Requests Per Second',
+        'Total Requests',
+        'Successful Requests',
+        'Failed Requests',
+        'Input Throughput (tokens/sec)',
+        'Output Throughput (tokens/sec)',
+        'Server Throughput (tokens/sec)',
+        'Cost Per Million Tokens ($)',
+        'Cost Per 1K Requests ($)',
+        'Cost Per Million Input Tokens ($)',
+        'Cost Per Million Output Tokens ($)',
+        'Instance Price Used ($/hour)'
+    ]
+    
+    csv_lines.append(','.join(headers))
+    
+    # Add data rows
+    for item in data:
+        combo = item['combination']
+        
+        # Sort data by processes for consistent ordering
+        sorted_data = sorted(item['data'], key=lambda x: x.get('processes', 0))
+        
+        for record in sorted_data:
+            row = [
+                combo.get('runtime', ''),
+                combo.get('instance_type', ''),
+                combo.get('model_name', ''),
+                combo.get('input_tokens', 0),
+                combo.get('output_tokens', 0),
+                combo.get('random_tokens', 0),
+                record.get('processes', 0),
+                record.get('first_token_latency_mean', 0),
+                record.get('first_token_latency_p50', 0),
+                record.get('first_token_latency_p90', 0),
+                record.get('end_to_end_latency_mean', 0),
+                record.get('end_to_end_latency_p50', 0),
+                record.get('end_to_end_latency_p90', 0),
+                record.get('output_tokens_per_second_mean', 0),
+                record.get('output_tokens_per_second_p50', 0),
+                record.get('output_tokens_per_second_p90', 0),
+                (record.get('success_rate', 0) * 100),
+                record.get('requests_per_second', 0),
+                record.get('total_requests', 0),
+                record.get('successful_requests', 0),
+                record.get('failed_requests', 0),
+                record.get('input_throughput', 0),
+                record.get('output_throughput', 0),
+                record.get('server_throughput', 0),
+                record.get('cost_per_million_tokens', 0),
+                record.get('cost_per_1k_requests', 0),
+                record.get('cost_per_million_input_tokens', 0),
+                record.get('cost_per_million_output_tokens', 0),
+                record.get('instance_price_used', 0)
+            ]
+            
+            # Escape any commas in the data and wrap in quotes if needed
+            escaped_row = []
+            for value in row:
+                string_value = str(value)
+                if ',' in string_value or '"' in string_value or '\n' in string_value:
+                    escaped_row.append(f'"{string_value.replace('"', '""')}"')
+                else:
+                    escaped_row.append(string_value)
+            
+            csv_lines.append(','.join(escaped_row))
+    
+    return '\n'.join(csv_lines)
 
 
 def main():

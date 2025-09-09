@@ -23,7 +23,7 @@ class TestRunner:
         
         # Create argument list for each request
         request_configs = [(config.model_id, config.input_tokens, config.output_tokens, 
-                           req_id, config.url, config.random_tokens) for req_id in request_ids]
+                           req_id, config.url, config.random_tokens, config.image_count, config.image_size) for req_id in request_ids]
         
         print(f"\nStarting {total_requests} requests...")
         print("Progress:")

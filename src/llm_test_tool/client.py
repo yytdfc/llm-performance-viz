@@ -29,9 +29,9 @@ class LlmApiClient:
     """Client for interacting with LLM APIs"""
     
     @staticmethod
-    def send_request(config: Tuple[str, int, int, int, str, int]) -> Dict[str, Any]:
+    def send_request(config: Tuple[str, int, int, int, str, int, int, str]) -> Dict[str, Any]:
         """Send a request to the LLM API and record metrics"""
-        model_id, input_tokens, output_tokens, request_id, url, random_tokens = config
+        model_id, input_tokens, output_tokens, request_id, url, random_tokens, image_count, image_size = config
         
         headers = {
             "Content-Type": "application/json",
@@ -40,18 +40,30 @@ class LlmApiClient:
         # Generate prompt based on specified token length with fixed and random parts
         # Calculate fixed_length based on input_tokens and random_tokens
         fixed_length = max(0, input_tokens - random_tokens)
-        user_prompt = PromptGenerator.generate(input_tokens, fixed_length)
+        user_prompt = PromptGenerator.generate(input_tokens, fixed_length, image_count, image_size)
         
-        payload = {
-            "model": model_id,
-            "messages": [
+        if image_count > 0:
+            # Format for messages with image content
+            messages = [
+                {
+                    "role": "user",
+                    "content": user_prompt["content"]
+                }
+            ]
+        else:
+            messages = [
                 {
                     "role": "user",
                     "content": user_prompt,
                 }
-            ],
+            ]
+        
+        payload = {
+            "model": model_id,
+            "messages": messages,
             "max_tokens": output_tokens,
             "stream": True,
+            "ignore_eos": True,
             "stream_options": {"include_usage": True},
         }
         

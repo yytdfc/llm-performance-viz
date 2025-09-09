@@ -109,6 +109,8 @@ test_matrix:
   output_tokens: [100, 400, 1000]       # Output token lengths
   processing_num: [1, 16, 32, 64, 128]  # Concurrent request counts
   random_tokens: [100, 1600, 6400]      # Random token counts (for cache testing)
+  image_count: [0, 1, 4]                # Number of images per prompt (optional)
+  image_size: ["128x128", "512x512"]    # Image sizes to test (optional)
 ```
 
 ##### 3. Test Configuration Section
@@ -154,6 +156,8 @@ test_matrix:
   output_tokens: [100, 400, 1000]
   processing_num: [1, 16, 32, 64, 128]
   random_tokens: [100, 1600, 6400]
+  image_count: [0, 1, 4]       # Testing with 0, 1, or 4 images (multimodal models only)
+  image_size: ["512x512"]     # Using 512x512 resolution images
 
 test_config:
   requests_per_process: 5
@@ -193,6 +197,8 @@ test_matrix:
   output_tokens: [100, 400, 1000]
   processing_num: [1, 16, 32, 64, 128]
   random_tokens: [100, 1600, 6400]
+  image_count: [0, 1, 4]       # Testing with 0, 1, or 4 images (multimodal models only)
+  image_size: ["512x512"]     # Using 512x512 resolution images
 
 test_config:
   requests_per_process: 5
@@ -265,6 +271,8 @@ uv run llm-test --processes 4 --requests 10 --model_id "Qwen/Qwen3-30B-A3B-FP8" 
 - `--output_tokens`: Maximum output tokens to generate (default: 100)
 - `--url`: API endpoint URL (default: "http://localhost:8080/v1/chat/completions")
 - `--output`: Results output file (default: "test_results.json")
+- `--image_count`: Number of images to include in the prompt (default: 0)
+- `--image_size`: Size of images in the format "widthxheight" (default: "512x512")
 
 ## Example Output
 

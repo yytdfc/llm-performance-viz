@@ -9,4 +9,5 @@ wheels/
 # Virtual environments
 .venv
 archive_results*
+archive_results*/*
 .vscode/*

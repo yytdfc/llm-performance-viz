@@ -1,14 +1,15 @@
 #!/bin/bash
 
 # Single test runner script
-# Usage: ./run_single_test.sh <config_path> [additional_args]
+# Usage: ./run_single_test.sh <config_path> [--api-endpoint <url>] [additional_args]
 
 set -e
 
 # Function to run test for a specific config
 run_test() {
     local config_path="$1"
-    local additional_args="$2"
+    shift  # Remove first argument
+    local additional_args="$@"  # Get all remaining arguments
     
     # Remove "model_configs/" prefix if present
     local clean_path="${config_path#model_configs/}"
@@ -39,8 +40,11 @@ run_test() {
 
 # Check if config path is provided
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 <config_path> [additional_args]"
-    echo "Example: $0 model_configs/sglang-v0.4.9.post4/g6e.4xlarge/Qwen3-30B-A3B-FP8.yaml"
+    echo "Usage: $0 <config_path> [--api-endpoint <url>] [additional_args]"
+    echo "Examples:"
+    echo "  $0 model_configs/sglang-v0.4.9.post4/g6e.4xlarge/Qwen3-30B-A3B-FP8.yaml"
+    echo "  $0 model_configs/vllm-v0.9.2/g6e.4xlarge/config.yaml --api-endpoint http://localhost:8000/v1/chat/completions"
+    echo "  $0 model_configs/vllm-v0.9.2/g6e.4xlarge/config.yaml --api-endpoint http://remote-server:8000/v1/chat/completions --skip-deployment"
     exit 1
 fi
 
@@ -48,4 +52,4 @@ fi
 mkdir -p archive_results
 
 # Run the test
-run_test "$1" "$2"
+run_test "$@"

@@ -24,18 +24,22 @@ class TestCase:
     output_tokens: int
     processing_num: int
     random_tokens: int
+    image_count: int = 0
+    image_size: str = "512x512"
     
     def __str__(self):
-        return f"in:{self.input_tokens}_out:{self.output_tokens}_proc:{self.processing_num}_rand:{self.random_tokens}"
+        img_str = f"_img:{self.image_count}_{self.image_size}" if self.image_count > 0 else ""
+        return f"in:{self.input_tokens}_out:{self.output_tokens}_proc:{self.processing_num}_rand:{self.random_tokens}{img_str}"
 
 
 class AutoTestRunner:
     """Automated test runner for vLLM deployments"""
     
-    def __init__(self, config_path: str, output_dir: str = None):
+    def __init__(self, config_path: str, output_dir: str = None, api_endpoint: str = None):
         """Initialize with deployment configuration"""
         self.deployment = VllmDeployment(config_path)
         self.config_path = Path(config_path)
+        self.custom_api_endpoint = api_endpoint
         
         # Load config file (support both YAML and JSON)
         with open(config_path, 'r') as f:
@@ -68,6 +72,11 @@ class AutoTestRunner:
     def _generate_test_cases(self) -> List[TestCase]:
         """Generate all test case combinations from the test matrix"""
         test_cases = []
+        
+        # Get image parameters if they exist in the test matrix
+        image_counts = self.test_matrix.get('image_count', [0])
+        image_sizes = self.test_matrix.get('image_size', ["512x512"])
+        
         for input_tokens in self.test_matrix['input_tokens']:
             for output_tokens in self.test_matrix['output_tokens']:
                 for processing_num in self.test_matrix['processing_num']:
@@ -77,16 +86,32 @@ class AutoTestRunner:
                             print(f"Skipping test case: input_tokens={input_tokens}, random_tokens={random_tokens} (random > input)")
                             continue
                         
-                        test_cases.append(TestCase(
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                            processing_num=processing_num,
-                            random_tokens=random_tokens
-                        ))
+                        # Add image parameters to test cases if they exist
+                        if 'image_count' in self.test_matrix and 'image_size' in self.test_matrix:
+                            for image_count in image_counts:
+                                for image_size in image_sizes:
+                                    test_cases.append(TestCase(
+                                        input_tokens=input_tokens,
+                                        output_tokens=output_tokens,
+                                        processing_num=processing_num,
+                                        random_tokens=random_tokens,
+                                        image_count=image_count,
+                                        image_size=image_size
+                                    ))
+                        else:
+                            test_cases.append(TestCase(
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                                processing_num=processing_num,
+                                random_tokens=random_tokens
+                            ))
         return test_cases
     
     def _create_test_config(self, test_case: TestCase) -> TestConfig:
         """Create a TestConfig for a specific test case"""
+        # Use custom API endpoint if provided, otherwise use deployment's API URL
+        api_url = self.custom_api_endpoint if self.custom_api_endpoint else self.deployment.get_api_url()
+        
         return TestConfig(
             processes=test_case.processing_num,
             requests_per_process=self.test_config['requests_per_process'],
@@ -94,13 +119,18 @@ class AutoTestRunner:
             input_tokens=test_case.input_tokens,
             random_tokens=test_case.random_tokens,
             output_tokens=test_case.output_tokens,
-            url=self.deployment.get_api_url(),
-            output_file=str(self.output_dir / f"test_{test_case}.json")
+            url=api_url,
+            output_file=str(self.output_dir / f"test_{test_case}.json"),
+            image_count=test_case.image_count,
+            image_size=test_case.image_size
         )
     
     def _run_warmup(self, test_case: TestCase) -> None:
         """Run warmup requests before the actual test"""
         print(f"Running {self.test_config['warmup_requests']} warmup requests...")
+        
+        # Use custom API endpoint if provided, otherwise use deployment's API URL
+        api_url = self.custom_api_endpoint if self.custom_api_endpoint else self.deployment.get_api_url()
         
         warmup_config = TestConfig(
             processes=1,
@@ -109,8 +139,10 @@ class AutoTestRunner:
             input_tokens=test_case.input_tokens,
             random_tokens=test_case.random_tokens,
             output_tokens=test_case.output_tokens,
-            url=self.deployment.get_api_url(),
-            output_file=str(self.output_dir / f"warmup_{test_case}.json")
+            url=api_url,
+            output_file=str(self.output_dir / f"warmup_{test_case}.json"),
+            image_count=test_case.image_count,
+            image_size=test_case.image_size
         )
         
         TestRunner.run(warmup_config)
@@ -140,6 +172,9 @@ class AutoTestRunner:
         print(f"Output tokens: {test_case.output_tokens}")
         print(f"Concurrent processes: {test_case.processing_num}")
         print(f"Random tokens: {test_case.random_tokens}")
+        if test_case.image_count > 0:
+            print(f"Image count: {test_case.image_count}")
+            print(f"Image size: {test_case.image_size}")
         print(f"{'='*60}")
         
         # Check for existing results
@@ -199,12 +234,16 @@ class AutoTestRunner:
                 print(f"Found {existing_count} existing test results that will be reused")
                 print(f"Will run {remaining_tests} new tests")
         
-        # Skip deployment if no new tests need to be run
-        need_deployment = remaining_tests > 0 and not skip_deployment
+        # Skip deployment if no new tests need to be run or if custom API endpoint is provided
+        need_deployment = remaining_tests > 0 and not skip_deployment and not self.custom_api_endpoint
         
         if remaining_tests == 0:
             print("\n✓ All test results already exist - skipping server deployment")
             print("✓ No new tests to run - proceeding directly to results compilation")
+            skip_deployment = True
+        elif self.custom_api_endpoint:
+            print(f"\nUsing custom API endpoint: {self.custom_api_endpoint}")
+            print("Skipping deployment - using provided endpoint")
             skip_deployment = True
         elif not skip_deployment:
             print("\nDeploying vLLM server...")

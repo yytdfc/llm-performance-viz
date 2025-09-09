@@ -17,6 +17,8 @@ class TestConfig:
     output_tokens: int
     url: str
     output_file: str
+    image_count: int = 0
+    image_size: str = "512x512"
 
 
 def parse_arguments() -> TestConfig:
@@ -38,6 +40,10 @@ def parse_arguments() -> TestConfig:
                         help="API endpoint URL")
     parser.add_argument("--output", type=str, default="test_results.json", 
                         help="Results output file")
+    parser.add_argument("--image_count", type=int, default=0, 
+                        help="Number of images to include in the prompt")
+    parser.add_argument("--image_size", type=str, default="512x512", 
+                        help="Size of images in the prompt (e.g., 128x128, 512x512)")
     
     args = parser.parse_args()
     
@@ -49,7 +55,9 @@ def parse_arguments() -> TestConfig:
         random_tokens=args.random_tokens,
         output_tokens=args.output_tokens,
         url=args.url,
-        output_file=args.output
+        output_file=args.output,
+        image_count=args.image_count,
+        image_size=args.image_size
     )
 
 
@@ -64,4 +72,7 @@ def print_test_config(config: TestConfig) -> None:
     print(f"- Random tokens: {config.random_tokens}")
     print(f"- Output tokens: {config.output_tokens}")
     print(f"- API endpoint: {config.url}")
+    if config.image_count > 0:
+        print(f"- Image count: {config.image_count}")
+        print(f"- Image size: {config.image_size}")
     print("-" * 50)

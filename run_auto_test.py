@@ -76,6 +76,13 @@ Examples:
         help="Show what would be tested without actually running tests"
     )
     
+    parser.add_argument(
+        "--api-endpoint",
+        type=str,
+        default=None,
+        help="Custom API endpoint URL (e.g., http://localhost:8000/v1/chat/completions). If not specified, uses deployment config."
+    )
+    
     return parser.parse_args()
 
 
@@ -96,10 +103,12 @@ def main():
     print(f"Skip deployment: {'yes' if args.skip_deployment else 'no'}")
     print(f"Force rerun: {'yes' if args.force_rerun else 'no'}")
     print(f"Dry run: {'yes' if args.dry_run else 'no'}")
+    if args.api_endpoint:
+        print(f"Custom API endpoint: {args.api_endpoint}")
     print("-" * 60)
     
     try:
-        runner = AutoTestRunner(args.config, args.output_dir)
+        runner = AutoTestRunner(args.config, args.output_dir, api_endpoint=args.api_endpoint)
         
         # Show the actual output directory being used
         if args.output_dir is None:

@@ -83,16 +83,16 @@ class LlmApiClient:
                 if line and line.startswith(b"data: "):
                     try:
                         out = json.loads(line[6:])
-                        
-                        
                             
                         # Collect response content
                         if "choices" in out and out["choices"] and "delta" in out["choices"][0]:
                             delta = out["choices"][0]["delta"]
-                            if "reasoning_content" in delta and delta["reasoning_content"]:
-                                response_text.append(delta["reasoning_content"])
                             if "content" in delta and delta["content"]:
                                 response_text.append(delta["content"])
+                            elif "reasoning_content" in delta and delta["reasoning_content"]:
+                                response_text.append(delta["reasoning_content"])
+                            elif "reasoning" in delta and delta["reasoning"]:
+                                response_text.append(delta["reasoning"])
                             # Record time of first token
                             if first_token_time is None and response_text:
                                 first_token_time = time.time()

@@ -19,6 +19,7 @@ dependencies = [
     "python-multipart>=0.0.5",
     "matplotlib>=3.5.0",
     "seaborn>=0.11.0",
+    "boto3>=1.37.38",
 ]
 
 [project.scripts]

@@ -59,47 +59,12 @@ The configuration file contains three main sections:
 
 Deployment parameters map directly to Docker commands:
 
-```yaml
-deployment:
-  docker_image: "vllm/vllm-openai:v0.9.2"
-  container_name: "vllm"
-  port: 8080
-  command: "python3 -m sglang.launch_server"  # Optional custom startup command
-  
-  # docker_params maps to docker run parameters
-  docker_params:
-    gpus: "all"                    # --gpus all
-    shm-size: "1000g"              # --shm-size 1000g
-    ipc: "host"                    # --ipc host
-    network: "host"                # --network host
-    volume:                        # -v /host:/container
-      - "/opt/dlami/nvme/:/vllm-workspace/"
-    environment:                   # -e KEY=VALUE
-      CUDA_VISIBLE_DEVICES: "0,1,2,3"
-  
-  # app_args maps to application startup parameters
-  app_args:
-    model: "Qwen/Qwen3-235B-A22B-FP8"
-    trust-remote-code: true
-    max-model-len: 32768
-    gpu-memory-utilization: 0.90
-    tensor-parallel-size: 4
-```
-
-**Corresponding Docker command:**
-```bash
-docker run --gpus all --shm-size 1000g --ipc host --network host \
-  -v /opt/dlami/nvme/:/vllm-workspace/ \
-  -e CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  -p 8080:8080 --name vllm \
-  vllm/vllm-openai:v0.9.2 \
-  --port 8080 \
-  --model Qwen/Qwen3-235B-A22B-FP8 \
-  --trust-remote-code \
-  --max-model-len 32768 \
-  --gpu-memory-utilization 0.90 \
-  --tensor-parallel-size 4
-```
+- `docker_image`: Docker image to use
+- `container_name`: Name for the container
+- `port`: Port to expose
+- `command`: (Optional) Custom startup command, mainly used for SGLang
+- `docker_params`: Maps to `docker run` parameters (gpus, shm-size, ipc, network, volume, environment)
+- `app_args`: Maps to application startup parameters
 
 ##### 2. Test Matrix Section
 
@@ -216,25 +181,86 @@ uv run deploy_server.py --config your_config.yaml
 
 You can add the `--show-command` parameter to dry-run and show the Docker deployment command to verify it's correct.
 
-#### Test with Existing Server
-```bash
-uv run run_auto_test.py --config your_config.yaml --skip-deployment
-```
-
-#### Automated Testing with Deployment
-```bash
-uv run run_auto_test.py --config model_configs/vllm-v0.9.2/p5.48xlarge/Qwen3-235B-A22B-FP8-tp8ep.yaml
-```
-
 #### Single Test
 
-This runs a single test configuration and saves results in a structured format that can be consumed by the web visualization server. You can also add the `--skip-deployment` parameter to test without deployment.
+Run a single test configuration with automatic deployment and result archiving:
 
 ```bash
-# Run single test
-./run_single_test.sh "model_configs/vllm-v0.9.2/g6e.48xlarge/Qwen3-235B-A22B-FP8-tp8ep.yaml"
+# Run test with deployment
+./run_single_test.sh model_configs/vllm-v0.9.2/g6e.48xlarge/Qwen3-235B-A22B-FP8-tp8ep.yaml
+
+# Test with existing server (skip deployment)
+./run_single_test.sh model_configs/vllm-v0.9.2/g6e.48xlarge/Qwen3-235B-A22B-FP8-tp8ep.yaml --skip-deployment
+
+# Test with custom API endpoint
+./run_single_test.sh model_configs/vllm-v0.9.2/g6e.4xlarge/config.yaml --api-endpoint http://localhost:8000/v1/chat/completions
+
+# Print system info
+./run_single_test.sh --sysinfo
 ```
 
+Results are saved to `archive_results/` in a structured format for web visualization.
+
+#### Results Directory Structure
+
+Test results are organized in `archive_results/` with the following structure:
+
+```
+archive_results/
+└── {framework_version}--{instance_type}--{model_name}/
+    ├── sysinfo.json                                    # System information
+    ├── comprehensive_results.json                      # Aggregated results
+    └── test_in:{input}_out:{output}_proc:{proc}_rand:{rand}.json  # Individual test results
+```
+
+Example:
+```
+archive_results/
+├── vllm-v0.9.2--g6e.4xlarge--Qwen3-30B-A3B-FP8/
+│   ├── sysinfo.json
+│   ├── comprehensive_results.json
+│   ├── test_in:1600_out:400_proc:1_rand:100.json
+│   ├── test_in:1600_out:400_proc:16_rand:100.json
+│   └── ...
+└── sglang-v0.4.9.post4--p5en.48xlarge--DeepSeek-R1-0528/
+    └── ...
+```
+
+**sysinfo.json** - System hardware information:
+```json
+{
+  "os": { "name": "Ubuntu", "version": "22.04", "kernel": "5.15.0" },
+  "cuda_version": "12.4",
+  "nvidia_driver_version": "550.54.15",
+  "gpu": { "name": "NVIDIA H100 80GB HBM3", "memory": "81559 MiB" },
+  "cpu": { "model": "Intel Xeon Platinum 8488C", "cores": "192" },
+  "total_memory": "2048 GB",
+  "timestamp": "2025-01-15T10:30:00Z"
+}
+```
+
+**test_*.json** - Individual test result:
+```json
+{
+  "metadata": {
+    "processes": 16,
+    "requests_per_process": 5,
+    "total_requests": 80,
+    "input_tokens": 1600,
+    "random_tokens": 100,
+    "output_tokens": 400,
+    "total_test_duration": 45.23,
+    "requests_per_second": 1.77
+  },
+  "statistics": {
+    "successful_requests": 80,
+    "success_rate": 1.0,
+    "first_token_latency": { "min": 0.12, "max": 0.45, "mean": 0.25, "p50": 0.23, "p90": 0.38 },
+    "end_to_end_latency": { "min": 3.2, "max": 5.1, "mean": 4.0, "p50": 3.9, "p90": 4.8 },
+    "output_tokens_per_second": { "min": 78.5, "max": 125.3, "mean": 100.2, "p50": 102.1, "p90": 118.5 }
+  }
+}
+```
 
 #### Batch Testing
 

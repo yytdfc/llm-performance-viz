@@ -55,47 +55,12 @@ model_configs/
 
 部署参数直接映射到 Docker 命令：
 
-```yaml
-deployment:
-  docker_image: "vllm/vllm-openai:v0.9.2"
-  container_name: "vllm"
-  port: 8080
-  command: "python3 -m sglang.launch_server"  # Optional custom startup command
-  
-  # docker_params maps to docker run parameters
-  docker_params:
-    gpus: "all"                    # --gpus all
-    shm-size: "1000g"              # --shm-size 1000g
-    ipc: "host"                    # --ipc host
-    network: "host"                # --network host
-    volume:                        # -v /host:/container
-      - "/opt/dlami/nvme/:/vllm-workspace/"
-    environment:                   # -e KEY=VALUE
-      CUDA_VISIBLE_DEVICES: "0,1,2,3"
-  
-  # app_args maps to application startup parameters
-  app_args:
-    model: "Qwen/Qwen3-235B-A22B-FP8"
-    trust-remote-code: true
-    max-model-len: 32768
-    gpu-memory-utilization: 0.90
-    tensor-parallel-size: 4
-```
-
-**Corresponding Docker command:**
-```bash
-docker run --gpus all --shm-size 1000g --ipc host --network host \
-  -v /opt/dlami/nvme/:/vllm-workspace/ \
-  -e CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  -p 8080:8080 --name vllm \
-  vllm/vllm-openai:v0.9.2 \
-  --port 8080 \
-  --model Qwen/Qwen3-235B-A22B-FP8 \
-  --trust-remote-code \
-  --max-model-len 32768 \
-  --gpu-memory-utilization 0.90 \
-  --tensor-parallel-size 4
-```
+- `docker_image`: 使用的 Docker 镜像
+- `container_name`: 容器名称
+- `port`: 暴露的端口
+- `command`: （可选）自定义启动命令，主要用于 SGLang
+- `docker_params`: 映射到 `docker run` 参数（gpus, shm-size, ipc, network, volume, environment）
+- `app_args`: 映射到应用启动参数
 
 ##### 2. 测试矩阵部分
 
@@ -205,23 +170,85 @@ uv run deploy_server.py --config your_config.yaml
 
 您可以添加 `--show-command` 参数来干运行并显示 Docker 部署命令以验证其正确性。
 
-#### 使用现有服务器测试
-```bash
-uv run run_auto_test.py --config your_config.yaml --skip-deployment
-```
-
-#### 自动化测试与部署
-```bash
-uv run run_auto_test.py --config model_configs/vllm-v0.9.2/p5.48xlarge/Qwen3-235B-A22B-FP8-tp8ep.yaml
-```
-
 #### 单次测试
 
-这运行单个测试配置并以结构化格式保存结果，可供 web 可视化服务器使用。您也可以添加 `--skip-deployment` 参数来在不部署的情况下测试。
+运行单个测试配置，自动部署并归档结果：
 
 ```bash
-# Run single test
-./run_single_test.sh "model_configs/vllm-v0.9.2/g6e.48xlarge/Qwen3-235B-A22B-FP8-tp8ep.yaml"
+# 带部署的测试
+./run_single_test.sh model_configs/vllm-v0.9.2/g6e.48xlarge/Qwen3-235B-A22B-FP8-tp8ep.yaml
+
+# 使用现有服务器测试（跳过部署）
+./run_single_test.sh model_configs/vllm-v0.9.2/g6e.48xlarge/Qwen3-235B-A22B-FP8-tp8ep.yaml --skip-deployment
+
+# 使用自定义 API 端点测试
+./run_single_test.sh model_configs/vllm-v0.9.2/g6e.4xlarge/config.yaml --api-endpoint http://localhost:8000/v1/chat/completions
+
+# 打印系统信息
+./run_single_test.sh --sysinfo
+```
+
+结果保存到 `archive_results/` 目录，格式化后可供 web 可视化使用。
+
+#### 结果目录结构
+
+测试结果保存在 `archive_results/` 目录，结构如下：
+
+```
+archive_results/
+└── {框架版本}--{实例类型}--{模型名称}/
+    ├── sysinfo.json                                    # 系统信息
+    ├── comprehensive_results.json                      # 汇总结果
+    └── test_in:{input}_out:{output}_proc:{proc}_rand:{rand}.json  # 单次测试结果
+```
+
+示例：
+```
+archive_results/
+├── vllm-v0.9.2--g6e.4xlarge--Qwen3-30B-A3B-FP8/
+│   ├── sysinfo.json
+│   ├── comprehensive_results.json
+│   ├── test_in:1600_out:400_proc:1_rand:100.json
+│   ├── test_in:1600_out:400_proc:16_rand:100.json
+│   └── ...
+└── sglang-v0.4.9.post4--p5en.48xlarge--DeepSeek-R1-0528/
+    └── ...
+```
+
+**sysinfo.json** - 系统硬件信息：
+```json
+{
+  "os": { "name": "Ubuntu", "version": "22.04", "kernel": "5.15.0" },
+  "cuda_version": "12.4",
+  "nvidia_driver_version": "550.54.15",
+  "gpu": { "name": "NVIDIA H100 80GB HBM3", "memory": "81559 MiB" },
+  "cpu": { "model": "Intel Xeon Platinum 8488C", "cores": "192" },
+  "total_memory": "2048 GB",
+  "timestamp": "2025-01-15T10:30:00Z"
+}
+```
+
+**test_*.json** - 单次测试结果：
+```json
+{
+  "metadata": {
+    "processes": 16,
+    "requests_per_process": 5,
+    "total_requests": 80,
+    "input_tokens": 1600,
+    "random_tokens": 100,
+    "output_tokens": 400,
+    "total_test_duration": 45.23,
+    "requests_per_second": 1.77
+  },
+  "statistics": {
+    "successful_requests": 80,
+    "success_rate": 1.0,
+    "first_token_latency": { "min": 0.12, "max": 0.45, "mean": 0.25, "p50": 0.23, "p90": 0.38 },
+    "end_to_end_latency": { "min": 3.2, "max": 5.1, "mean": 4.0, "p50": 3.9, "p90": 4.8 },
+    "output_tokens_per_second": { "min": 78.5, "max": 125.3, "mean": 100.2, "p50": 102.1, "p90": 118.5 }
+  }
+}
 ```
 
 #### 批量测试
